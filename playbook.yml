@@ -1,0 +1,120 @@
+---
+- name: Deploy API
+  hosts: servers
+  become: true
+
+  vars:
+    mysql_password: password 
+
+  tasks:
+
+    - name:  "\u001b[32m Update and upgrade apt \u001b[0m"
+      apt:
+        update_cache: yes
+        state: latest
+        upgrade: yes
+
+    - name: "\u001b[32m Check Apache2 Version \u001b[0m"
+      apt:
+        name: apache2
+        state: latest
+
+    - name: "\u001b[32m Installing php 7.4.16 \u001b[0m"
+      shell: |
+        apt -y install lsb-release apt-transport-https ca-certificates
+        wget -O /etc/apt/trusted.gpg.d/php.gpg https://packages.sury.org/php/apt.gpg
+        echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/php.list
+
+    - name: "\u001b[36m Installing php 7.4.16 \u001b[0m"
+      apt:
+        name: php7.4, php7.4-common, php7.4-cli, php7.4-fpm, php7.4-json, php7.4-curl, php7.4-xml, libapache2-mod-php, php7.4-mbstring, php7.4-mysql
+
+    - name: dl de symfony
+      get_url:
+        url: https://get.symfony.com/cli/installer
+        dest: /home/installer
+      
+    - name: install de symfony
+      shell: |
+        bash /home/installer
+        mv /root/.symfony/bin/symfony /usr/local/bin/symfony
+
+    - name: "\u001b[32m Install MariaDB \u001b[0m"
+      apt:
+        name: mariadb-server
+
+    - name: "\u001b[32m Téléchager composer \u001b[0m"
+      get_url:
+        url: https://getcomposer.org/installer
+        dest: /tmp/installer
+      tags: composer
+
+    # - name: Create new databases with names 'foo' and 'bar'
+    #   community.mysql.mysql_db:
+    #     name: test
+    #     state: present
+
+
+    - name: "\u001b[32m Installer composer \u001b[0m"
+      shell: cat /tmp/installer | php -- --install-dir=/usr/local/bin
+      args:
+        creates: /usr/local/bin/composer
+      tags: composer
+
+    - name: "\u001b[32m Renommer composer.phar en composer \u001b[0m"
+      shell: mv /usr/local/bin/composer.phar /usr/local/bin/composer
+      args:
+        creates: /usr/local/bin/composer
+      tags: composer
+
+    - name: "\u001b[32m Rendre composer exécutable \u001b[0m"
+      file: 
+        path: /usr/local/bin/composer
+        mode: a+x
+        state: file
+      tags: composer
+
+    - name: "\u001b[31;1m Ansible check project directory \u001b[0m"
+      stat:
+        path: /home/e-commerce
+      register: project
+
+    - name: "\u001b[31;1m Copying project files and adding permission \u001b[0m"
+      ansible.builtin.copy:
+        src: ./src
+        dest: /home/e-commerce
+        owner: hugo
+        mode: '0644'
+      # when: not project.stat.exists
+
+    - name: "\u001b[34m Setup \u001b[0m] [\u001b[36m Creating env.local file \u001b[0m"
+      copy:
+          dest: "/home/e-commerce/.env.local"
+          content: |
+            #E-Commerce sql connection setup :
+            DATABASE_URL="mysql://root:password@localhost:3306/ecommerce?serverVersion=mariadb-10.3.27"
+
+
+    - name: Set password
+      ansible.builtin.lineinfile:
+        path: /etc/mysql/debian.cnf
+        regexp: '^password ='
+        line: password = {{mysql_password}}
+
+    - name: "\u001b[34m Setup \u001b[0m] [\u001b[36m Database : Create \u001b[0m"
+      command: chdir=/home/e-commerce/ php bin/console doctrine:database:create --if-not-exists
+    - name: "\u001b[34m Setup \u001b[0m] [\u001b[36m Database : Update schematics :  \u001b[0m"
+      command: chdir=/home/e-commerce/ php bin/console doctrine:schema:update --force
+    - name: "\u001b[34m Setup \u001b[0m] [\u001b[36m Database : Migration \u001b[0m"
+      command: chdir=/home/e-commerce/ php bin/console make:migration -n
+    # - name: "\u001b[34m Setup \u001b[0m] [\u001b[36m Database : Migrate \u001b[0m"
+    #   command: chdir=/home/e-commerce/ php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
+    - name: "\u001b[34m Setup \u001b[0m] [\u001b[36m Database : Fixtures \u001b[0m"
+      command: chdir=/home/e-commerce/ php bin/console doctrine:fixtures:load -n
+
+    - name: Exécute api
+      shell: |
+          composer install -n
+          symfony serve -d --no-tls
+      args:
+        chdir: /home/e-commerce
